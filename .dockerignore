@@ -1,0 +1,14 @@
+.git
+.env
+.env.*
+!.env.template
+.venv
+__pycache__
+.pytest_cache
+.coverage
+*.sqlite3
+*.zip
+*.log
+htmlcov
+.ruff_cache
+celerybeat-schedule*

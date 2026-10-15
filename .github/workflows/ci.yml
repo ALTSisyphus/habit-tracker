@@ -1,0 +1,73 @@
+name: Python tests and code quality
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.12', '3.14']
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: habits_ci
+          POSTGRES_USER: habits_ci
+          POSTGRES_PASSWORD: ci-only-password
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd 'pg_isready -U habits_ci -d habits_ci'
+          --health-interval 5s --health-timeout 5s --health-retries 15
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd 'redis-cli ping'
+          --health-interval 5s --health-timeout 5s --health-retries 15
+    env:
+      READ_DOT_ENV: 'False'
+      SECRET_KEY: ci-only-secret-key-with-at-least-fifty-characters-0123456789
+      DATABASE_URL: postgres://habits_ci:ci-only-password@localhost:5432/habits_ci
+      TEST_DATABASE_URL: postgres://habits_ci:ci-only-password@localhost:5432/habits_ci
+      REDIS_URL: redis://localhost:6379/0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Ruff
+        run: ruff check .
+      - name: Django checks and migrations on PostgreSQL
+        run: |
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+          python manage.py migrate --noinput
+          python manage.py migrate --check
+          python manage.py spectacular --file /tmp/schema.yml --validate --fail-on-warn
+          python manage.py collectstatic --noinput
+      - name: Coverage at least 80 percent on PostgreSQL
+        run: pytest --cov=. --cov-report=term-missing --cov-fail-under=80
+      - name: Celery worker, Beat and Redis smoke test
+        run: |
+          celery -A config worker --pool=solo --loglevel=info --hostname=audit@ci > /tmp/worker.log 2>&1 &
+          worker_pid=$!
+          celery -A config beat --loglevel=info --schedule=/tmp/audit-beat > /tmp/beat.log 2>&1 &
+          beat_pid=$!
+          trap 'kill "$worker_pid" "$beat_pid" 2>/dev/null || true' EXIT
+          python - <<'PY'
+          import time
+          from config.celery import app
+          for attempt in range(30):
+              if app.control.ping(destination=['audit@ci'], timeout=1):
+                  break
+              time.sleep(1)
+          else:
+              raise RuntimeError('Worker did not become ready')
+          result = app.send_task('notifications.tasks.check_due_habits')
+          assert result.get(timeout=20) == 0
+          PY
+          kill -0 "$beat_pid"
