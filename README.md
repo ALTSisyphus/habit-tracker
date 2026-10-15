@@ -1,224 +1,249 @@
-# Habit Tracker — курсовой проект Skypro
+# Habit Tracker — трекер полезных привычек
 
-Бэкенд SPA-приложения «Трекер полезных привычек»: Django REST Framework, JWT,
-PostgreSQL, Redis, Celery, Telegram Bot API и OpenAPI/Swagger.
+**Habit Tracker** — бэкенд REST API для SPA-приложения по формированию полезных привычек. Курсовой проект Skypro по мотивам идеи из книги Джеймса Клира «Атомные привычки».
 
-Проект рассчитан на Ubuntu 26.04 LTS и VSCode. Рекомендуемая версия Python:
-**3.12–3.14**; Docker использует Python 3.12. Django 5.2 — LTS (поддержка Python 3.14 начиная с 5.2.8).
-Ubuntu 26.04 поставляет Python 3.14; для локального venv установите
-`python3-venv`. Фактическая среда аудита и ограничения указаны в
-[CODE_REVIEW_REPORT.md](CODE_REVIEW_REPORT.md).
+Пользователь может создавать привычки по принципу «Я буду **[действие]** в **[время]** в **[месте]**», назначать вознаграждение, выбирать периодичность и получать напоминания в Telegram. Приложение предоставляет API для фронтенда; пользовательский веб-интерфейс в состав проекта не входит.
 
 ## Возможности
 
-- Регистрация, JWT access/refresh токены.
-- CRUD только собственных привычек; чужие объекты скрыты.
-- Публичный список доступен для GET всем (без редактирования).
-- Пагинация limit/offset: **не более пяти привычек**.
-- Валидация всех пяти обязательных условий, в том числе на `PATCH`.
-- Telegram: безопасная привязка через одноразовую ссылку, сообщения по расписанию.
-- Celery Beat + Redis + Celery Worker, запись попыток отправки в БД.
-- CORS из `.env`, Swagger / ReDoc, тесты pytest.
+- Регистрация пользователей и авторизация с помощью JWT (`access` / `refresh`).
+- Создание, просмотр, изменение и удаление **собственных** привычек.
+- Просмотр **публичных** привычек других пользователей без права их редактирования.
+- Пагинация списков привычек через `limit` и `offset`, не более 5 записей за запрос.
+- Проверка правил формирования привычек при создании и частичном обновлении (`PATCH`).
+- Привязка Telegram-аккаунта через одноразовую ссылку и уведомления по расписанию.
+- Асинхронная обработка напоминаний с помощью Celery, Redis и Celery Beat.
+- Документация REST API: OpenAPI, Swagger UI и ReDoc.
+- Настройки CORS, автоматические тесты и проверка стиля кода.
 
-## Быстрый запуск в Docker (рекомендуется)
+## Технологии
 
-1. Установите Docker Engine и Docker Compose plugin.
-2. Создайте `.env` на основе шаблона:
+| Компонент | Технология |
+| --- | --- |
+| Язык / веб-фреймворк | Python, Django 5.2 LTS |
+| REST API | Django REST Framework |
+| Авторизация | Simple JWT |
+| База данных | PostgreSQL |
+| Очередь задач / брокер | Celery, Redis |
+| Планировщик | Celery Beat |
+| Уведомления | Telegram Bot API |
+| Документация | drf-spectacular (OpenAPI / Swagger / ReDoc) |
+| Кросс-доменные запросы | django-cors-headers |
+| Тесты / покрытие | pytest, pytest-django, pytest-cov |
+| Стиль | Ruff |
+| Запуск | Docker Compose, Gunicorn |
+
+## Структура проекта
+
+```text
+habit-tracker/
+├── config/                  # Настройки Django, маршрутизация, Celery
+├── users/                   # Пользователи, регистрация, JWT, тесты
+├── habits/                  # Привычки, API, бизнес-правила, тесты
+├── notifications/           # Telegram, напоминания, фоновые задачи, тесты
+├── .github/workflows/       # CI-проверки
+├── .env.template            # Пример конфигурации окружения
+├── Dockerfile
+├── docker-compose.yml
+├── manage.py
+├── pyproject.toml
+├── pytest.ini
+├── requirements.txt
+├── requirements-dev.txt
+└── README.md
+```
+
+В приложении `habits` определены привычки и правила их формирования; `users` отвечает за пользователей и авторизацию; `notifications` содержит логику Telegram-привязки, планирования и отправки сообщений.
+
+## Модель привычки и бизнес-правила
+
+У привычки есть владелец (`owner`), место (`place`), время (`time`), действие (`action`), признак приятной привычки (`is_pleasant`), связанная привычка (`related_habit`), периодичность в днях (`periodicity`), вознаграждение (`reward`), длительность в секундах (`duration`) и признак публичности (`is_public`).
+
+Ограничения:
+
+1. Нельзя одновременно заполнить `reward` и `related_habit`.
+2. Длительность выполнения — **от 1 до 120 секунд**.
+3. В качестве `related_habit` допускается только **приятная** привычка текущего пользователя.
+4. Приятная привычка (`is_pleasant=true`) не может иметь `reward` или `related_habit`.
+5. Периодичность — **от 1 до 7 дней**; по умолчанию 1 день.
+
+Пользователь не может изменить владельца привычки, получить доступ к чужому приватному объекту или управлять чужой публичной привычкой. Правила проверяются и при создании, и при обновлении.
+
+## Быстрый запуск через Docker Compose
+
+**Предварительно:** установлены Docker Engine и Docker Compose. Для отправки настоящих Telegram-уведомлений нужен бот, созданный через [@BotFather](https://t.me/BotFather).
+
+1. Клонируйте репозиторий и перейдите в каталог проекта:
+
+   ```bash
+   git clone https://github.com/ALTSisyphus/habit-tracker.git
+   cd habit-tracker
+   ```
+
+2. Создайте файл окружения:
 
    ```bash
    cp .env.template .env
    ```
 
-3. В `.env` **обязательно** задайте случайный `SECRET_KEY` (например,
-   `python -c 'import secrets; print(secrets.token_urlsafe(48))'`), реальные
-   `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_USERNAME`, безопасный пароль БД и ваши
-   `ALLOWED_HOSTS`, `CORS_ALLOWED_ORIGINS`. Токен бота получают через
-   [@BotFather](https://t.me/BotFather). Имя бота указывается без `@`.
-   Если бот не нужен для локального тестирования API, сервис `bot` можно
-   не запускать, но Celery и API продолжат работать.
+   Укажите в `.env` собственный `SECRET_KEY`, пароль PostgreSQL, `ALLOWED_HOSTS`, `CORS_ALLOWED_ORIGINS`, `TELEGRAM_BOT_TOKEN` и `TELEGRAM_BOT_USERNAME`. Для локального HTTP-запуска не включайте production-режим (`PRODUCTION=False`, если этот параметр присутствует в шаблоне). Не публикуйте `.env` в репозитории.
 
-4. Запустите контейнеры (веб-приложение автоматически применяет миграции):
+   Пример генерации ключа:
+
+   ```bash
+   python3 -c 'import secrets; print(secrets.token_urlsafe(48))'
+   ```
+
+3. Соберите и запустите сервисы:
 
    ```bash
    docker compose up --build -d
    docker compose ps
    ```
 
-5. Откройте:
-   - Swagger: <http://localhost:8000/api/docs/>
-   - ReDoc: <http://localhost:8000/api/redoc/>
-   - Health: <http://localhost:8000/health/>
+   Compose поднимает `db` (PostgreSQL), `redis`, `web` (Django/Gunicorn), `worker` (Celery), `beat` (планировщик) и `bot` (получение сообщений Telegram). Веб-сервис применяет миграции при запуске.
 
-6. Для администратора:
+4. При необходимости создайте администратора:
 
    ```bash
    docker compose exec web python manage.py createsuperuser
    ```
 
-Docker Compose пробрасывает PostgreSQL, Redis и API **только на 127.0.0.1**;
-при публикации в сети используйте HTTPS и reverse proxy (Nginx/Caddy).
+5. Для просмотра журналов:
 
-### Локальный запуск без Docker
+   ```bash
+   docker compose logs -f web worker beat bot
+   ```
 
-Установите Python 3.12+, PostgreSQL и Redis. Создайте БД и пользователя в
-соответствии с `DATABASE_URL` в `.env`. В терминале VSCode:
+Остановка контейнеров без удаления данных PostgreSQL:
+
+```bash
+docker compose down
+```
+
+> Без настоящего Telegram-токена запуск сервиса `bot` может завершаться ошибкой. Для проверки только API можно запустить основные сервисы отдельно: `docker compose up --build -d db redis web worker beat`.
+
+### Адреса после запуска
+
+| Адрес | Назначение |
+| --- | --- |
+| `http://localhost:8000/api/docs/` | Swagger UI |
+| `http://localhost:8000/api/redoc/` | ReDoc |
+| `http://localhost:8000/api/schema/` | OpenAPI-схема |
+| `http://localhost:8000/health/` | Проверка доступности приложения |
+| `http://localhost:8000/admin/` | Django Admin |
+
+## Локальный запуск без Docker
+
+Потребуются Python, PostgreSQL и Redis. Настройте `DATABASE_URL` и `REDIS_URL` в `.env` под локальные сервисы, затем выполните:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements-dev.txt
-cp .env.template .env  # если ранее ещё не создавали
+cp .env.template .env  # только если .env ещё не создан
 python manage.py migrate
 python manage.py runserver
 ```
 
-В трёх других терминалах (с активированной `.venv`):
+Для автоматических напоминаний дополнительно запустите в отдельных терминалах с активированным окружением:
 
 ```bash
 celery -A config worker --loglevel=info
+```
+
+```bash
 celery -A config beat --loglevel=info
+```
+
+```bash
 python manage.py run_telegram_bot
 ```
 
-В VSCode используйте `Python: Select Interpreter` -> `.venv/bin/python`.
+## API
 
-## Работа с API
+| Метод | Эндпоинт | Доступ / действие |
+| --- | --- | --- |
+| `POST` | `/api/auth/register/` | Регистрация |
+| `POST` | `/api/auth/token/` | Получение JWT-токенов |
+| `POST` | `/api/auth/token/refresh/` | Обновление access-токена |
+| `GET` | `/api/habits/` | Список своих привычек |
+| `POST` | `/api/habits/` | Создать привычку |
+| `GET` | `/api/habits/{id}/` | Получить свою привычку |
+| `PUT`, `PATCH` | `/api/habits/{id}/` | Изменить свою привычку |
+| `DELETE` | `/api/habits/{id}/` | Удалить свою привычку |
+| `GET` | `/api/public-habits/` | Просмотр публичных привычек |
+| `POST` | `/api/telegram/link/` | Получение одноразовой ссылки для привязки Telegram |
 
-### Регистрация и токены
+Для защищённых методов требуется заголовок `Authorization: Bearer <access_token>`.
+
+### Примеры запросов
+
+**Регистрация:**
 
 ```bash
 curl -X POST http://localhost:8000/api/auth/register/ \
   -H 'Content-Type: application/json' \
-  -d '{"username":"student","password":"StrongPassword123!","email":"example@test.ru"}'
+  -d '{"username":"student","email":"student@example.com","password":"StrongPassword123!"}'
+```
 
+**Получение JWT:**
+
+```bash
 curl -X POST http://localhost:8000/api/auth/token/ \
   -H 'Content-Type: application/json' \
   -d '{"username":"student","password":"StrongPassword123!"}'
 ```
 
-Возьмите поле `access` из ответа. Далее передавайте:
-`Authorization: Bearer <access>`.
-
-### Создание полезной привычки
+**Создание привычки:**
 
 ```bash
 curl -X POST http://localhost:8000/api/habits/ \
-  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H 'Authorization: Bearer YOUR_ACCESS_TOKEN' \
   -H 'Content-Type: application/json' \
-  -d '{"place":"Дом","time":"08:00:00","action":"Читать книгу","duration":120,"periodicity":1,"reward":"Чашка кофе","is_public":true}'
+  -d '{"place":"Дом","time":"08:00:00","action":"Читать книгу","duration":120,"periodicity":1,"reward":"Чашка чая","is_public":true}'
 ```
 
-- `duration`: целое число 1–120, секунды.
-- `periodicity`: целое число 1–7, дни, по умолчанию 1.
-- `reward` и `related_habit` нельзя указывать одновременно.
-- Связанная привычка — **собственная** приятная (`is_pleasant=true`).
-- У приятной привычки не может быть `reward` и `related_habit`.
-- Указывать `owner` нельзя: он определяется по access-токену.
-- Приятные привычки используются как вознаграждение и сами не рассылаются.
+**Получение списка с пагинацией:**
 
-### Эндпоинты
-
-| Метод | URL | Доступ |
-| --- | --- | --- |
-| POST | `/api/auth/register/` | Все |
-| POST | `/api/auth/token/` | Все |
-| POST | `/api/auth/token/refresh/` | Все |
-| GET | `/api/habits/?limit=5&offset=0` | Авторизованный владелец |
-| POST | `/api/habits/` | Авторизованный владелец |
-| GET | `/api/habits/{id}/` | Владелец |
-| PUT, PATCH | `/api/habits/{id}/` | Владелец |
-| DELETE | `/api/habits/{id}/` | Владелец |
-| GET | `/api/public-habits/` | Все (только чтение) |
-| POST | `/api/telegram/link/` | Авторизованный пользователь |
-| GET | `/api/schema/` | Все |
-| GET | `/api/docs/` | Все |
-| GET | `/api/redoc/` | Все |
-| GET | `/health/` | Все |
-
-Пример пагинации:
-
-```json
-{
-  "count": 12,
-  "next": "http://localhost:8000/api/habits/?limit=5&offset=5",
-  "previous": null,
-  "results": []
-}
+```http
+GET /api/habits/?limit=5&offset=0
 ```
 
-Значение `results` в реальном ответе содержит до пяти объектов.
+Ответ содержит `count`, `next`, `previous` и `results`. Максимальный размер страницы — 5 записей.
 
-## Подключение Telegram
+## Telegram-напоминания
 
-1. Создайте бота у [@BotFather](https://t.me/BotFather).
-2. Добавьте токен и username в `.env`, перезапустите контейнеры.
-3. Получите JWT, выполните `POST /api/telegram/link/` с заголовком Bearer.
-4. API вернёт `deep_link`, действительный 10 минут. Перейдите по ссылке и
-   нажмите **Start** в личном диалоге с ботом.
-5. После подтверждения бот начнёт получать право отправлять напоминания.
+1. Создайте Telegram-бота через [@BotFather](https://t.me/BotFather).
+2. Запишите `TELEGRAM_BOT_TOKEN` и `TELEGRAM_BOT_USERNAME` в `.env`.
+3. Авторизуйтесь в API и выполните `POST /api/telegram/link/` с JWT-токеном.
+4. Откройте полученную в ответе `deep_link` и нажмите **Start** в личном чате с ботом. Одноразовая ссылка действует **10 минут**.
+5. После привязки бот сможет отправлять уведомления о полезных привычках по расписанию.
 
-Никогда не принимайте `telegram_chat_id` от незаверенного клиента. В этом
-проекте он сохраняется только после предъявления одноразового кода в Telegram.
-Для безопасной работы запускайте **ровно один** экземпляр `bot` с `getUpdates`;
-при активном Telegram webhook polling не работает.
+Celery Beat периодически проверяет, когда нужно напомнить о привычке. Задачи передаются через Redis в Celery Worker; отправки учитываются в базе данных, а ошибки обрабатываются с ограничением числа попыток. Приятные привычки используются как вознаграждения и сами не вызывают отдельные напоминания.
 
-Сервис `beat` проверяет расписание раз в минуту. При необходимости задача
-сохраняется в таблице `Reminder` с уникальным ключом по привычке и времени,
-затем через `worker` передаётся Telegram API. Отправка может задержаться до
-минуты. По часам используется `TIME_ZONE` из `.env`.
+Время напоминаний определяется настройкой `TIME_ZONE` в окружении. Возможна небольшая задержка относительно заданного времени из-за периодичности проверки и работы очереди.
 
-**Ограничение:** Telegram API не обеспечивает транзакционную доставку и не
-принимает ключ идемпотентности. При аварии воркера после доставки, но до
-обновления БД, возможно повторное сообщение. Применён подход best-effort:
-атомарный захват задачи, журнал отправок, ограничение попыток и восстановление
-зависших отправок через 5 минут. Это минимизирует, но не исключает повторы.
+> При сбое между успешной отправкой сообщения в Telegram и записью результата в БД теоретически возможен повтор. Telegram `sendMessage` не предоставляет транзакционную гарантию «ровно один раз».
 
-## Проверка тестов, стиля и миграций
+## Тестирование и качество кода
 
-Установите dev-зависимости и запустите:
+Для локальной проверки (после установки зависимостей из `requirements-dev.txt`):
 
 ```bash
-pytest --cov=. --cov-report=term-missing --cov-fail-under=80
-ruff check .
 python manage.py check
 python manage.py makemigrations --check --dry-run
-python manage.py spectacular --file /tmp/schema.yml --validate --fail-on-warn
+pytest --cov=. --cov-report=term-missing --cov-fail-under=80
+ruff check .
+python manage.py spectacular --file schema.yml --validate --fail-on-warn
 ```
 
-Тесты используют `config.settings_test` и SQLite в памяти; для тестов не нужен
-запущенный PostgreSQL/Redis или настоящий Telegram-токен. API и Celery тестируются
-с помощью mock-объектов; реальную рассылку нужно дополнительно проверить с
-личным ботом.
+Тесты проверяют регистрацию, JWT, CRUD, разделение прав, валидацию, пагинацию и обработку Telegram-уведомлений. Для внешних вызовов Telegram в автоматических тестах используются имитации ответов API. Часть интеграционных проверок конкурентной обработки требует PostgreSQL, а реальную доставку уведомлений следует проверять отдельно с запущенными Redis, Worker, Beat и ботом.
 
-## Безопасность и развёртывание
+## Безопасность и настройка окружения
 
-- Настоящий `.env` исключён из Git и из Docker build context.
-- Для production установите `DEBUG=False`, надёжный `SECRET_KEY`, разрешённые
-  hosts/origins, HTTPS и пароль PostgreSQL, отличный от примера.
-- Для production включите `PRODUCTION=True`: HTTPS redirect, защищённые cookie
-  и HSTS включаются автоматически; слабый ключ, DEBUG, wildcard hosts и SQLite
-  блокируют запуск. Нужен ключ длиной от 50 символов.
-- Если HTTPS завершается на доверенном reverse proxy, включите
-  `TRUST_PROXY_HTTPS=True` только после настройки удаления и перезаписи
-  заголовка `X-Forwarded-Proto` на прокси. Health endpoint исключён из redirect
-  для внутренней проверки контейнера. HSTS распространяется на поддомены:
-  все поддомены также должны поддерживать HTTPS.
-- Статика Django admin обслуживается WhiteNoise после `collectstatic`;
-  Docker выполняет эту команду при сборке. Настройте мониторинг и backups.
-- При масштабировании Celery Beat должен быть в единственном экземпляре.
-- Привязку бота выполняйте только в приватном чате. Дубликаты `chat_id`
-  блокируются уникальным ограничением.
-
-## Интеграционные проверки
-
-CI настроен на Python 3.12 и 3.14 с PostgreSQL 16 и Redis 7. Для проверки
-локальной тестовой PostgreSQL-базы задайте `TEST_DATABASE_URL` и запустите pytest.
-Пользователю БД нужно право создания тестовой базы. Без этой переменной
-используется SQLite; тест конкурентной доставки требует PostgreSQL и пропускается.
-Запуск workflow в GitHub не считается подтверждённым локальным аудитом.
-
-`READ_DOT_ENV=False` отключает чтение `.env` для изолированных проверок.
-Значения пароля в `DATABASE_URL` должны быть URL-encoded, если содержат `@`,
-`/`, `:`, `#` или другие специальные символы. Это относится и к паролю,
-интерполируемому Docker Compose в URL; используйте URL-safe случайный пароль.
-Не сохраняйте вывод `docker compose config` с реальными секретами в отчётах.
+- Все секреты и параметры подключения задаются через `.env`; в Git хранится только `.env.template`.
+- Для публикации на сервере используйте `DEBUG=False`, надёжный `SECRET_KEY`, отдельные значения `ALLOWED_HOSTS` и `CORS_ALLOWED_ORIGINS`, HTTPS и безопасные пароли БД.
+- В production должны работать PostgreSQL и Redis; SQLite используется только для локальных тестов, где это предусмотрено тестовой конфигурацией.
+- Telegram-привязка выполняется через одноразовый код, а не через произвольный `chat_id` в запросе.
+- Приложение предназначено для использования с SPA-клиентом; сам фронтенд в курсовую работу не входит.
